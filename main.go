@@ -42,6 +42,8 @@ type Crawler struct {
 	count int
 	// count of threads in processing
 	processing int32
+	// channel for adding webpages
+	webpages chan Webpage
 }
 
 //starts the crawler
@@ -50,7 +52,7 @@ type Crawler struct {
 //get extracted.
 //the second waits for filtered URLs as they
 //pass through all the registered filters
-func (crawler *Crawler) start() {
+func (crawler *Crawler) start(wsite *website) {
 	//wait for new URLs to be extracted and passed to the URLs channel.
 	go func() {
 		for {
@@ -72,14 +74,29 @@ func (crawler *Crawler) start() {
 			select {
 			case url := <-crawler.filteredUrls:
 				crawler.count++
-				log.Debugf("%d: Crawling %s ", crawler.count, url)
+				// log.Debugf("%d: Crawling %s ", crawler.count, url)
 				atomic.AddInt32(&crawler.processing, 1)
-				go crawler.crawl(url)
-				log.Debugf("Waiting for %d second before next requests", crawler.politeness)
+				wpage := Webpage{url, nil}
+				go crawler.crawl(&wpage)
+				log.Infof("Waiting for %d second before next requests", crawler.politeness)
 				time.Sleep(time.Duration(crawler.politeness) * time.Second)
 			case <-crawler.quit:
 				log.Debugf("> Closing filteredUrls channel")
 				close(crawler.filteredUrls)
+				return
+			}
+		}
+	}()
+
+	// Collect website objects from crawling
+	go func() {
+		for {
+			select {
+			case wpage := <-crawler.webpages:
+				wsite.AddWebpage(wpage)
+				log.Infof("Added %s", wpage.URL)
+			case <-crawler.quit:
+				close(crawler.webpages)
 				return
 			}
 		}
@@ -108,8 +125,10 @@ func (crawler *Crawler) filter(url string) {
 //given a URL, the method will send an HTTP GET request
 //extract the response body
 //extract the URLs from the body
-func (crawler *Crawler) crawl(url string) {
+func (crawler *Crawler) crawl(wpage *Webpage) {
 	defer func() { crawler.processing += -1 }()
+	url := wpage.URL
+
 	//send http request
 	depth, _ := crawler.depth.Load(url)
 	visited, _ := crawler.visited.Load(url)
@@ -125,8 +144,10 @@ func (crawler *Crawler) crawl(url string) {
 				log.Debug("Error while fetching body for : " + url)
 				log.Debug(err)
 			} else {
-				crawler.extractUrls(url, resp.Body)
+				crawler.extractUrls(wpage, resp.Body)
+				log.Debugf("References for %s are %d", wpage.URL, len(wpage.References))
 				crawler.visited.Store(url, true)
+				crawler.webpages <- *wpage
 			}
 		}
 	} else {
@@ -135,8 +156,10 @@ func (crawler *Crawler) crawl(url string) {
 	return
 }
 
-func (crawler *Crawler) extractUrls(Url string, body io.ReadCloser) {
+func (crawler *Crawler) extractUrls(wpage *Webpage, body io.ReadCloser) {
 	doc, err := goquery.NewDocumentFromReader(body)
+	Url := wpage.URL
+
 	baseURL, _ := url.Parse(Url)
 	if err != nil {
 		log.Debugf("Error parsing goquery: %s", Url)
@@ -147,15 +170,13 @@ func (crawler *Crawler) extractUrls(Url string, body io.ReadCloser) {
 		raw_href, ok := s.Attr("href")
 		if ok {
 			href, _ := url.Parse(raw_href)
-			//Ignore the sections link
-			if strings.HasPrefix(raw_href, "#") {
-				return
-			}
 			// Resolve the relative urls
 			if strings.HasPrefix(raw_href, "/") ||
 				strings.HasPrefix(raw_href, ".") {
 				href = baseURL.ResolveReference(href)
 			}
+
+			wpage.References = append(wpage.References, href.String())
 			_, visited := crawler.visited.Load(href.String())
 
 			if !visited {
@@ -182,6 +203,7 @@ func main() {
 	//create a new instance of the crawler structure
 	// startURL := "https://sumit.murari.me"
 	startURL := "https://monzo.com/"
+	wsite := website{startURL, nil}
 	c := Crawler{
 		startURL,
 		make(chan string, 10),
@@ -190,9 +212,10 @@ func main() {
 		make([]filterFunc, 0),
 		sync.Map{},
 		sync.Map{},
-		3,
+		2,
 		0,
 		0,
+		make(chan Webpage, 10),
 	}
 
 	c.addFilter(IsInternal)
@@ -202,17 +225,22 @@ func main() {
 	c.depth.Store(startURL, 0)
 	c.visited.Store(startURL, false)
 
-	c.start()
+	c.start(&wsite)
 	c.urls <- c.host
 	for {
 		log.Debugf("urls queue: %d ; filteredUrls queue: %d; processing: %d ", len(c.urls), len(c.filteredUrls), c.processing)
 		time.Sleep(2 * time.Second)
 
 		if len(c.filteredUrls) == 0 && len(c.urls) == 0 && c.processing == 0 {
-			c.quit <- "done"
 			log.Debugf("urls and filteredUrls channels and no url in processing")
+			c.quit <- "done"
+			c.quit <- "done"
+			c.quit <- "done"
 			break
 		}
 	}
+	fmt.Println("Printing website")
+	wsite.PrintBasicSiteMap()
+	wsite.PrintSiteGraph()
 	fmt.Println("Good bye")
 }

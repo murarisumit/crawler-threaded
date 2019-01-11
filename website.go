@@ -12,7 +12,7 @@ import (
 // A webpage is url with refrences to other webpages
 type Webpage struct {
 	URL        string
-	References []Webpage
+	References []string
 }
 
 // A website is a list of webpages
@@ -57,7 +57,7 @@ func (w *website) PrintSiteGraph() {
 		// fmt.Fprintln(file, page.String())
 		io.Copy(file, strings.NewReader(page.URL+"\n"))
 		for _, reference := range page.References {
-			io.Copy(file, strings.NewReader("-> "+reference.URL+"\n"))
+			io.Copy(file, strings.NewReader("-> "+reference+"\n"))
 			// fmt.Fprintln(file, "-> "+reference.String())
 		}
 	}
