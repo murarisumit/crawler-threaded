@@ -19,4 +19,7 @@ log-notime:
 	export RLOG_LOG_NOTIME=yes
 
 run: | build
-	./webcrawler https://monzo.com/
+	./webcrawler -u https://monzo.com -d 2
+
+# run: | build
+# 	./webcrawler -u https://sumit.murari.me/ -d 3
