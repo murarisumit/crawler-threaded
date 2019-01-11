@@ -1,4 +1,5 @@
 APP=webcrawler
+
 build:
 	go build
 
